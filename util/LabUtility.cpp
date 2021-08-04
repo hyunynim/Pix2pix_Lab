@@ -14,11 +14,15 @@ uniform_int_distribution<int> d(0, 1e9);
 typedef long long ll;
 char fileName[1010];
 
+string rootDir = "./20210803/";
+string predDir = rootDir + "res1/";
+string resDir = rootDir + "concat/";
+
 const double PI = 3.141592653589793;
 const double EXP = 2.71828182845904;
 const double SIGMA = 1;
 const double SIGMA_COEF = 12.0;
-const double COLOR_SIGMA = 64.0;
+const double COLOR_SIGMA = 64;
 double GaussianFunction(double x, double sigma = SIGMA) {
 	const double tmp = 1.0 / ((sqrt(2 * PI)) * sigma);
 	return tmp * exp(-(x * x) / (2 * sigma * sigma));
@@ -28,8 +32,8 @@ double GaussianFunction2D(double x, double y, double sigma = SIGMA) {
 }
 void BackgroundCorrection(Mat& gt, Mat& pred, int flag) {
 	/*
-	Magenta: (255, 0, 255)
-	Gray: (127, 127, 127)
+	0: Magenta: (255, 0, 255)
+	1: Gray: (127, 127, 127)
 	*/
 	vector<vector<int>> back = { {255, 0, 255}, {127, 127, 127} };
 	auto it1 = gt.begin<Vec4b>();
@@ -97,12 +101,11 @@ vector<vector<Vec3f>> MatNormalization(Mat img) {
 	}
 	return res;
 }
-Mat JointBilateralFiltering(Mat src, Mat target, int kernelSize = 5, double sigma = -1, double colorSigma = -1) {
+Mat JointBilateralFiltering(Mat &src, Mat &target, int kernelSize = 23, double sigma = -1, double colorSigma = -1) {
 	if (sigma == -1)
 		sigma = kernelSize / SIGMA_COEF;
 	if (colorSigma == -1)
 		colorSigma = COLOR_SIGMA;
-
 	auto filter = GetGaussianFilter(kernelSize, sigma);
 	Mat res = Mat(src.rows, src.cols, CV_8UC3);
 	for (int i = 0; i < res.rows; ++i) {
@@ -132,14 +135,14 @@ Mat JointBilateralFiltering(Mat src, Mat target, int kernelSize = 5, double sigm
 	}
 	return res;
 }
-Mat JointBilateralFilteringWithNormalization(Mat src, Mat target, int kernelSize = 5, double sigma = -1, double colorSigma = -1) {
+Mat JointBilateralFilteringWithNormalization(Mat src, Mat target, int kernelSize = 9, double sigma = -1, double colorSigma = -1) {
 	Mat srcNorm, targetNorm;
 	src.convertTo(srcNorm, CV_32FC3, 1.0 / 255);
 	target.convertTo(targetNorm, CV_32FC3, 1.0 / 255);
 	if (sigma == -1)
 		sigma = kernelSize / SIGMA_COEF;
 	if (colorSigma == -1)
-		colorSigma = COLOR_SIGMA;
+		colorSigma = 1.0;
 
 	auto filter = GetGaussianFilter(kernelSize, sigma);
 	Mat res = Mat(src.rows, src.cols, CV_32FC3);
@@ -170,7 +173,7 @@ Mat JointBilateralFilteringWithNormalization(Mat src, Mat target, int kernelSize
 	}
 	return res;
 }
-bool BackgroundCheck(Vec4b p1, int flag) {
+bool BackgroundCheck(Vec4b &p1, int flag) {
 	/*
 	Magenta: (255, 0, 255)
 	Gray: (127, 127, 127)
@@ -180,13 +183,14 @@ bool BackgroundCheck(Vec4b p1, int flag) {
 		if (p1[i] != back[flag][i]) return 1;
 	return 0;
 }
-double GetRMSE(Mat img1, Mat img2) {
+double GetRMSE(Mat &img1, Mat &img2, int flag) {
 	double res = 0.0;
 	int cnt = 0;
 	auto it1 = img1.begin<Vec4b>();
 	auto it2 = img2.begin<Vec4b>();
+	int cc = 0;
 	for (; it1 != img1.end<Vec4b>(); ++it1, ++it2) {
-		if (!BackgroundCheck((*it1), 1) || !BackgroundCheck((*it2), 1)) continue;
+		if (!BackgroundCheck((*it1), flag) || !BackgroundCheck((*it2), flag)) continue;
 		for (int i = 0; i < 3; ++i) {
 			auto p1 = ((*it1)[i] - 127.5) / 127.5;
 			auto p2 = ((*it2)[i] - 127.5) / 127.5;
@@ -196,7 +200,103 @@ double GetRMSE(Mat img1, Mat img2) {
 	}
 	return sqrt(res / (cnt * 3.0));
 }
+Mat pred, origin;
+void onChange(int pos, void* param) {
+	static int checker = 1;
+	
+	Mat* pMat = (Mat*)param;
+	int l = getTrackbarPos("Threshold(L)", "test");
+	int r = getTrackbarPos("Threshold(R)", "test");
+	Mat tmp1, tmp2;
+	Canny(pred, tmp1, l, r);
+	Canny(origin, tmp2, l, r);
+	//bitwise_and(tmp1, tmp2, tmp1);
+	//GaussianBlur(tmp1, tmp1, Size(11, 11), 1.5);
+	imshow("test", tmp1);
+	if (checker && r == 255) {
+		checker = 0;
+		for (auto it = tmp1.begin<Vec3b>(); it != tmp1.end<Vec3b>(); ++it) {
+			for (int i = 0; i < 3; ++i) {
+				printf("%d ", (*it)[i]);
+			}
+			puts("");
+		}
+	}
+}
+void EdgeTest() {
+	pred = imread("pp/6.png", 1);
+	origin = imread("pp/4.png", 1);
+	imshow("origgin", origin);
+	imshow("pred", pred);
+	Mat img;
+	int lThreshold = 0, rThreshold= 244;
+	namedWindow("test");
+	createTrackbar("Threshold(L)", "test", &lThreshold, 255, onChange, (void*)& pred);
+	createTrackbar("Threshold(R)", "test", &rThreshold, 255, onChange, (void*)& pred);
+	waitKey(0);
+}
+void RMSETest() {
+	string rootDir = "./20210803/";
+	string predDir = rootDir + "res(Pix2Pix)/";
+	string resDir = rootDir + "concat/";
+	int imageCount = 500;
+	char fName[1010];
+	vector<pair<double, int>> rmses;
+	double rmse = 0.0;
+	puts("Check RMSE...");
+	for (int i = 1; i <= imageCount; ++i) {
+		printf("%d/%d\n", i, imageCount);
+		Mat inp, gt, pred;
+		sprintf(fName, "%s(result%d)Ground_Truth.png", predDir.c_str(), i);
+		gt = imread(fName);
+		sprintf(fName, "%s(result%d)Input_Image.png", predDir.c_str(), i);
+		inp = imread(fName);
+		sprintf(fName, "%s(result%d)Predicted_Image.png", predDir.c_str(), i);
+		pred = imread(fName);
+
+		pred = JointBilateralFiltering(inp, pred);
+		if(pred.type() == CV_32FC3)
+			pred.convertTo(pred, CV_8UC3, 255);
+
+		double res = GetRMSE(gt, pred, 1);
+		rmses.push_back({ res, i });
+		rmse += res;
+	}
+	sort(rmses.begin(), rmses.end());
+	rmse /= imageCount;
+	sprintf(fName, "%sres.txt", resDir.c_str());
+	FILE* fp = fopen(fName, "w");
+	int count = 1;
+	printf("%lf", rmse);
+	fprintf(fp, "total RMSE: %lf\n", rmse);
+	puts("Save results...");
+	for (auto i : rmses) {
+		printf("%d/%d\n", count, imageCount);
+		fprintf(fp, "%d: %lf\n", i.second, i.first);
+		Mat inp, gt, pred;
+		sprintf(fName, "%s(result%d)Ground_Truth.png", predDir.c_str(), i.second);
+		gt = imread(fName);
+		sprintf(fName, "%s(result%d)Input_Image.png", predDir.c_str(), i.second);
+		inp = imread(fName);
+		sprintf(fName, "%s(result%d)Predicted_Image.png", predDir.c_str(), i.second);
+		pred = imread(fName);
+
+		Mat concatImg = inp;
+
+		auto res = JointBilateralFiltering(inp, pred);
+		if (res.type() == CV_32FC3)
+			res.convertTo(res, CV_8UC3, 255);
+
+		hconcat(concatImg, gt, concatImg);
+		hconcat(concatImg, pred, concatImg);
+		hconcat(concatImg, res, concatImg);
+
+		sprintf(fName, "%s%d(%d).png", resDir.c_str(), i.second, count++, i.second);
+		imwrite(fName, concatImg);
+	}
+}
 int main() {
+	RMSETest(); return 0;
 	/*
 	auto kern = GetGaussianFilter(255, 32);
 	Mat kernImg(Size(255, 255), CV_8UC1);
@@ -208,11 +308,8 @@ int main() {
 	imshow("kernel", kernImg);
 	waitKey(0);
 	*/
-  
 	//Filtering Test
 	/*
-	Mat img1 = imread("pp/3.png", 1);
-	Mat img2 = imread("pp/3.png", 1);
 	BackgroundCorrection(img1, img1, 1);
 	imshow("origin", img1);
 	auto res1 = MyGaussianFiltering(img1, 9);
@@ -228,9 +325,6 @@ int main() {
 	*/
 
 	//GetRMSE
-	string rootDir = "./20210728/";
-	string predDir = rootDir + "res/";
-	string resDir = rootDir + "concat/";
 
 	int imageCount = 50;
 	char fName[1010];
@@ -256,21 +350,20 @@ int main() {
 		hconcat(concatImg, gt, concatImg);
 		hconcat(concatImg, pred, concatImg);
 		for (int kk = kernelStart; kk <= kernelStart + 2 * kernelCount; kk += 2) {
-			/*
-      Mat JBF = JointBilateralFiltering(inp, pred, kk);
-			hconcat(concatImg, JBF, concatImg);
-			auto res2 = GetRMSE(gt, JBF);
-			RMSE[(kk - kernelStart) / 2] += res2;
-      */
+			//Mat JBF = JointBilateralFiltering(inp, pred, kk);
+			//hconcat(concatImg, JBF, concatImg);
+			//auto res2 = GetRMSE(gt, JBF);
+			//RMSE[(kk - kernelStart) / 2] += res2;
+
 			Mat JBF = JointBilateralFilteringWithNormalization(inp, pred, kk, (kk - 3) / 6.0);
 			Mat tmpImg;
 			JBF.convertTo(tmpImg, CV_8UC3, 255);
 			hconcat(concatImg, tmpImg, concatImg);
-			auto res2 = GetRMSE(gt, tmpImg);
+			auto res2 = GetRMSE(gt, tmpImg, 1);
 			RMSE[(kk - kernelStart) / 2] += res2;
 		}
 
-		auto res1 = GetRMSE(gt, pred);
+		auto res1 = GetRMSE(gt, pred, 1);
 
 		result1.push_back({ res1, concatImg });
 		rmse += res1;
