@@ -23,6 +23,10 @@ const double EXP = 2.71828182845904;
 const double SIGMA = 1;
 const double SIGMA_COEF = 12.0;
 const double COLOR_SIGMA = 64;
+const int HEIGHT = 256;
+const int WIDTH = 256;
+vector<double> normSrc[256][256];
+vector<double> normTarget[256][256];
 double GaussianFunction(double x, double sigma = SIGMA) {
 	const double tmp = 1.0 / ((sqrt(2 * PI)) * sigma);
 	return tmp * exp(-(x * x) / (2 * sigma * sigma));
@@ -173,6 +177,62 @@ Mat JointBilateralFilteringWithNormalization(Mat src, Mat target, int kernelSize
 	}
 	return res;
 }
+Mat JointBilateralFilteringWithNormalization2(Mat src, Mat target, int kernelSize = 9, double sigma = -1, double colorSigma = -1) {
+	Mat srcNorm, targetNorm;
+	//src.convertTo(srcNorm, CV_32FC3, 1.0 / 255);
+	//target.convertTo(targetNorm, CV_32FC3, 1.0 / 255);
+	if (sigma == -1)
+		sigma = kernelSize / SIGMA_COEF;
+	if (colorSigma == -1)
+		colorSigma = 1.0;
+
+	auto filter = GetGaussianFilter(kernelSize, sigma);
+
+	Mat res = Mat(src.rows, src.cols, CV_8UC3);
+	for (int i = 0; i < res.rows; ++i) {
+		for (int j = 0; j < res.cols; ++j) {
+			normSrc[i][j].clear();
+			normTarget[i][j].clear();
+			double sum1 = 0.0, sum2 = 0.0;
+			for (int c = 0; c < 3; ++c) {
+				auto cur1 = src.at<Vec3b>(i, j)[c];
+				auto cur2 = target.at<Vec3b>(i, j)[c];
+				sum1 = ((double)cur1 * cur1);
+				sum2 = ((double)cur2 * cur2);
+				normSrc[i][j].push_back(cur1);
+				normTarget[i][j].push_back(cur2);
+			}
+			normSrc[i][j].push_back(sqrt(sum1));
+			normTarget[i][j].push_back(sqrt(sum2));
+		}
+	}
+
+	for (int i = 0; i < res.rows; ++i) {
+		for (int j = 0; j < res.cols; ++j) {
+			for (int c = 0; c < 3; ++c) {
+				double sum = 0.0;
+				double sum2 = 0.0;
+				for (int k = 0; k < kernelSize; ++k) {
+					for (int l = 0; l < kernelSize; ++l) {
+						int nx = i + (k - kernelSize / 2);
+						int ny = j + (l - kernelSize / 2);
+
+						auto origin = normSrc[i][j][c] / normSrc[i][j].back();
+
+						if (0 <= nx && nx < res.rows && 0 <= ny && ny < res.cols) {
+							auto np = normSrc[nx][ny][c] / normTarget[i][j].back();
+							sum += filter[k][l] * target.at<Vec3b>(nx, ny)[c] * GaussianFunction(origin - np, colorSigma);
+							sum2 += filter[k][l] * GaussianFunction(origin - np, colorSigma);
+						}
+					}
+				}
+				res.at<Vec3b>(i, j)[c] = (sum / sum2);
+			}
+
+		}
+	}
+	return res;
+}
 bool BackgroundCheck(Vec4b &p1, int flag) {
 	/*
 	Magenta: (255, 0, 255)
@@ -236,10 +296,11 @@ void EdgeTest() {
 	waitKey(0);
 }
 void RMSETest() {
-	string rootDir = "./20210803/";
-	string predDir = rootDir + "res(Pix2Pix)/";
+	const int backgroundFlag = 0;
+	string rootDir = "./20210811/";
+	string predDir = rootDir + "res2/";
 	string resDir = rootDir + "concat/";
-	int imageCount = 500;
+	int imageCount = 95;
 	char fName[1010];
 	vector<pair<double, int>> rmses;
 	double rmse = 0.0;
@@ -254,11 +315,11 @@ void RMSETest() {
 		sprintf(fName, "%s(result%d)Predicted_Image.png", predDir.c_str(), i);
 		pred = imread(fName);
 
-		pred = JointBilateralFiltering(inp, pred);
+		pred = JointBilateralFilteringWithNormalization(inp, pred);
 		if(pred.type() == CV_32FC3)
 			pred.convertTo(pred, CV_8UC3, 255);
 
-		double res = GetRMSE(gt, pred, 1);
+		double res = GetRMSE(gt, pred, backgroundFlag);
 		rmses.push_back({ res, i });
 		rmse += res;
 	}
@@ -283,7 +344,7 @@ void RMSETest() {
 
 		Mat concatImg = inp;
 
-		auto res = JointBilateralFiltering(inp, pred);
+		auto res = JointBilateralFilteringWithNormalization(inp, pred);
 		if (res.type() == CV_32FC3)
 			res.convertTo(res, CV_8UC3, 255);
 
